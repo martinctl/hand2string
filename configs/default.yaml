@@ -1,0 +1,35 @@
+# Default training / experiment config.
+
+dataset:
+  name: wlasl              # asl_alphabet | wlasl | how2sign
+  root: data/wlasl
+  num_classes: 2000
+
+preprocessing:
+  mediapipe:
+    hands: true
+    pose: true
+    face: false
+  fps: 30
+
+model:
+  type: lstm               # mlp | lstm | cnn1d
+  hidden_dim: 256
+  num_layers: 2
+  dropout: 0.3
+
+training:
+  window_size: 32          # swept over {8, 16, 32, 64, 96, 128}
+  batch_size: 64
+  epochs: 50
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  device: cuda
+
+llm:
+  backend: ollama          # ollama | api
+  model: llama3:8b
+
+inference:
+  foveated: false
+  webcam_index: 0

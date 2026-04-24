@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Conda
+.conda/
+envs/
+
+# Data & model artifacts
+data/*
+!data/.gitkeep
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.h5
+runs/
+wandb/
+mlruns/
+checkpoints/
+outputs/
+
+# LaTeX build
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
