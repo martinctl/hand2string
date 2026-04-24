@@ -49,4 +49,4 @@ conda env update -f environment.yml --prune
 
 ## Team
 
-Antoine Gautier, Coralie Banuls, Martin Catheland, Rached Toukko, Louis Larher.
+Antoine Gautier, Coralie Banuls, Martin Catheland, Rached Toukko, Louis Larcher.
