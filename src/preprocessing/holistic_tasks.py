@@ -13,7 +13,11 @@ corners — which give us the face *position*, *width* (ear-to-ear), and
 *mouth extremities* needed to learn relative-distance features for ASL.
 We expose these as ``FACE_FROM_POSE_INDICES`` and a corresponding
 connection set so a downstream visualizer can draw them as a small face
-sub-skeleton.
+sub-skeleton. For overlays that need a proper mesh, pass ``include_face=True``
+to :class:`Holistic` to run the Face Landmarker on a **crop around the pose
+face landmarks** (full-frame inference misses on wide ASL shots), then use
+MediaPipe ``drawing_utils`` with ``FaceLandmarksConnections`` as in the official
+notebook.
 
 Models (``.task`` files) are auto-downloaded into
 ``$HAND2STRING_MODEL_DIR`` (default ``~/.cache/hand2string/mediapipe/``)
@@ -30,6 +34,7 @@ import mediapipe as mp
 import numpy as np
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision as mp_vision
+from mediapipe.tasks.python.components.containers import landmark as landmark_lib
 
 POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
@@ -38,6 +43,10 @@ POSE_MODEL_URL = (
 HAND_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/latest/hand_landmarker.task"
+)
+FACE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task"
 )
 
 POSE_LMS = 33
@@ -87,6 +96,64 @@ FACE_FROM_POSE_CONNECTIONS: tuple[tuple[int, int], ...] = (
     (1, 9), (4, 10),           # eye-inner -> mouth corner (cheek diagonal)
 )
 
+# Full face mesh from the Face Landmarker task (tessellation graph, ~478 points).
+FACE_MESH_CONNECTIONS: tuple[tuple[int, int], ...] = tuple(
+    (c.start, c.end)
+    for c in mp_vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
+)
+
+
+def _face_crop_from_pose(
+    pose: np.ndarray, width: int, height: int
+) -> tuple[int, int, int, int] | None:
+    """Square ROI in pixel coords (left, top, right, bottom) with right,bottom exclusive.
+
+    Full-frame Face Landmarker often misses on ASL clips (small face in a wide shot);
+    a tight crop around the 11 pose face landmarks fixes detection.
+    """
+    pts = pose[list(FACE_FROM_POSE_INDICES)]
+    xmin, ymin = float(pts[:, 0].min()), float(pts[:, 1].min())
+    xmax, ymax = float(pts[:, 0].max()), float(pts[:, 1].max())
+    cx = (xmin + xmax) / 2.0
+    cy = (ymin + ymax) / 2.0
+    span = max(xmax - xmin, ymax - ymin)
+    side = max(span * 2.4, 0.38)
+    side = min(side, 0.92)
+    half = side / 2.0
+    left = int(max(0, np.floor((cx - half) * width)))
+    right = int(min(width, np.ceil((cx + half) * width)))
+    top = int(max(0, np.floor((cy - half) * height)))
+    bottom = int(min(height, np.ceil((cy + half) * height)))
+    if right - left < 40 or bottom - top < 40:
+        return None
+    return left, top, right, bottom
+
+
+def _remap_face_landmarks_to_full_frame(
+    landmarks: list,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    width: int,
+    height: int,
+) -> list[landmark_lib.NormalizedLandmark]:
+    cw, ch = right - left, bottom - top
+    out: list[landmark_lib.NormalizedLandmark] = []
+    for lm in landmarks:
+        px = lm.x * cw + left
+        py = lm.y * ch + top
+        out.append(
+            landmark_lib.NormalizedLandmark(
+                x=px / width,
+                y=py / height,
+                z=lm.z,
+                visibility=lm.visibility,
+                presence=lm.presence,
+            )
+        )
+    return out
+
 
 def _model_cache_dir() -> Path:
     override = os.environ.get("HAND2STRING_MODEL_DIR")
@@ -109,10 +176,16 @@ def _ensure_model(url: str, name: str) -> Path:
 
 @dataclass
 class FrameLandmarks:
-    """Per-frame normalized landmarks. ``None`` entries mean "not detected"."""
+    """Per-frame normalized landmarks. ``None`` entries mean "not detected".
+
+    When :class:`Holistic` is constructed with ``include_face=True``,
+    ``face_landmarks`` holds the dense face mesh in full-frame normalized coords
+    (Face Landmarker run on a crop around BlazePose face keypoints).
+    """
     pose: np.ndarray | None       # (33, 3) x,y,z in image-normalized coords
     left_hand: np.ndarray | None  # (21, 3)
     right_hand: np.ndarray | None # (21, 3)
+    face_landmarks: list[landmark_lib.NormalizedLandmark] | None = None
 
 
 def _to_array(landmarks, n: int) -> np.ndarray:
@@ -132,7 +205,7 @@ def face_subset(pose: np.ndarray | None) -> np.ndarray | None:
 class Holistic:
     """Stateful per-video tracker. Use as ``with Holistic() as h: h.process(rgb)``."""
 
-    def __init__(self, fps: float = 25.0):
+    def __init__(self, fps: float = 25.0, *, include_face: bool = False):
         pose_path = _ensure_model(POSE_MODEL_URL, "pose_landmarker_lite.task")
         hand_path = _ensure_model(HAND_MODEL_URL, "hand_landmarker.task")
 
@@ -151,6 +224,19 @@ class Holistic:
             )
         )
 
+        self._face: mp_vision.FaceLandmarker | None = None
+        if include_face:
+            face_path = _ensure_model(FACE_MODEL_URL, "face_landmarker.task")
+            self._face = mp_vision.FaceLandmarker.create_from_options(
+                mp_vision.FaceLandmarkerOptions(
+                    base_options=mp_tasks.BaseOptions(model_asset_path=str(face_path)),
+                    running_mode=mp_vision.RunningMode.IMAGE,
+                    num_faces=1,
+                    min_face_detection_confidence=0.3,
+                    min_face_presence_confidence=0.3,
+                )
+            )
+
         self._dt_ms = max(1, int(round(1000.0 / fps)))
         self._t_ms = 0
         self._closed = False
@@ -166,6 +252,8 @@ class Holistic:
             return
         self._pose.close()
         self._hand.close()
+        if self._face is not None:
+            self._face.close()
         self._closed = True
 
     def process(self, rgb: np.ndarray) -> FrameLandmarks:
@@ -183,6 +271,29 @@ class Holistic:
             else None
         )
 
+        face_lms: list[landmark_lib.NormalizedLandmark] | None = None
+        if self._face is not None and pose_arr is not None:
+            h, w = rgb.shape[0], rgb.shape[1]
+            crop = _face_crop_from_pose(pose_arr, w, h)
+            if crop is not None:
+                left, top, right, bottom = crop
+                crop_rgb = np.ascontiguousarray(rgb[top:bottom, left:right])
+                if crop_rgb.size:
+                    crop_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB, data=crop_rgb
+                    )
+                    face_res = self._face.detect(crop_image)
+                    if face_res.face_landmarks:
+                        face_lms = _remap_face_landmarks_to_full_frame(
+                            face_res.face_landmarks[0],
+                            left,
+                            top,
+                            right,
+                            bottom,
+                            w,
+                            h,
+                        )
+
         left = right = None
         for lm_list, hd in zip(hand_res.hand_landmarks, hand_res.handedness):
             arr = _to_array(lm_list, HAND_LMS)
@@ -192,4 +303,9 @@ class Holistic:
             elif label == "Right" and right is None:
                 right = arr
 
-        return FrameLandmarks(pose=pose_arr, left_hand=left, right_hand=right)
+        return FrameLandmarks(
+            pose=pose_arr,
+            left_hand=left,
+            right_hand=right,
+            face_landmarks=face_lms,
+        )
