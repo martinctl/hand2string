@@ -4,8 +4,9 @@ Returns 75 keypoints per frame: 33 body-pose + 21 left-hand + 21 right-hand.
 The 11 face landmarks (nose, eyes, ears, mouth corners) are **already part
 of the pose output** (indices 0–10) — the helper
 :func:`src.preprocessing.holistic_tasks.face_subset` slices them out if a
-caller only needs the face geometry. We don't run a separate FaceLandmarker
-because it's broken in mediapipe 0.10.33 (see :mod:`holistic_tasks`).
+caller only needs the face geometry. Dense face mesh / detector outputs are
+optional via ``include_face`` on :class:`src.preprocessing.holistic_tasks.Holistic`
+(see :mod:`holistic_tasks`).
 """
 from __future__ import annotations
 

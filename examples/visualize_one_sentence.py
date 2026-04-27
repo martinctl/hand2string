@@ -22,13 +22,12 @@ import cv2
 import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
-from mediapipe.tasks.python import vision as mp_vision
-from mediapipe.tasks.python.vision import drawing_styles, drawing_utils
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.preprocessing.holistic_tasks import (
+    FACE_DETECTOR_KEYPOINT_DRAW_INDICES,
     FACE_FROM_POSE_INDICES,
     HAND_CONNECTIONS,
     POSE_CONNECTIONS,
@@ -74,39 +73,43 @@ def _draw_skeleton(
         cv2.circle(frame_bgr, (int(x), int(y)), point_radius, color, -1, cv2.LINE_AA)
 
 
-def _draw_face_mesh_mediapipe_demo(bgr: np.ndarray, face_landmarks) -> None:
-    """Match the MediaPipe Face Landmarker Colab: tesselation + contours + irises."""
-    if not face_landmarks:
+def _draw_face_detections(
+    bgr: np.ndarray,
+    detections,
+    *,
+    box_color: tuple[int, int, int] = (0, 255, 255),
+    box_thickness: int = 2,
+    point_radius: int = 4,
+) -> None:
+    """BlazeFace-style overlay: axis-aligned bbox + six keypoints per face."""
+    if not detections:
         return
-    tess = mp_vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
-    drawing_utils.draw_landmarks(
-        image=bgr,
-        landmark_list=face_landmarks,
-        connections=tess,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_tesselation_style(),
+    h, w = bgr.shape[:2]
+    kpt_colors = (
+        (0, 0, 255),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 0, 255),
+        (0, 165, 255),
+        (255, 255, 0),
     )
-    drawing_utils.draw_landmarks(
-        image=bgr,
-        landmark_list=face_landmarks,
-        connections=mp_vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_contours_style(),
-    )
-    drawing_utils.draw_landmarks(
-        image=bgr,
-        landmark_list=face_landmarks,
-        connections=mp_vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style(),
-    )
-    drawing_utils.draw_landmarks(
-        image=bgr,
-        landmark_list=face_landmarks,
-        connections=mp_vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS,
-        landmark_drawing_spec=None,
-        connection_drawing_spec=drawing_styles.get_default_face_mesh_iris_connections_style(),
-    )
+    for det in detections:
+        bb = det.bounding_box
+        x1, y1 = bb.origin_x, bb.origin_y
+        x2, y2 = bb.origin_x + bb.width, bb.origin_y + bb.height
+        cv2.rectangle(bgr, (x1, y1), (x2, y2), box_color, box_thickness, cv2.LINE_AA)
+        if not det.keypoints:
+            continue
+        for i, kp in enumerate(det.keypoints):
+            if i not in FACE_DETECTOR_KEYPOINT_DRAW_INDICES:
+                continue
+            if kp.x is None or kp.y is None:
+                continue
+            px = int(kp.x * w)
+            py = int(kp.y * h)
+            col = kpt_colors[i % len(kpt_colors)]
+            cv2.circle(bgr, (px, py), point_radius, col, -1, cv2.LINE_AA)
+            cv2.circle(bgr, (px, py), point_radius + 1, (255, 255, 255), 1, cv2.LINE_AA)
 
 
 def draw_caption(frame: np.ndarray, text: str) -> None:
@@ -182,9 +185,7 @@ def main() -> None:
     right_color = (255, 128, 0)     # cyan-ish (BGR)
 
     n = 0
-    # Face Landmarker on a pose-guided crop (see Holistic) + MediaPipe drawing
-    # styles, as in the official notebook. BlazePose face points are omitted so
-    # the dense mesh is not covered by the old 11-dot wireframe.
+    # Face Detector (BlazeFace full-range): bounding box + 6 keypoints per face.
     with Holistic(fps=fps, include_face=True) as h:
         while True:
             ok, bgr = cap.read()
@@ -198,7 +199,7 @@ def main() -> None:
             )
             _draw_skeleton(bgr, lms.left_hand, HAND_CONNECTIONS, left_color)
             _draw_skeleton(bgr, lms.right_hand, HAND_CONNECTIONS, right_color)
-            _draw_face_mesh_mediapipe_demo(bgr, lms.face_landmarks)
+            _draw_face_detections(bgr, lms.face_detections)
 
             draw_caption(bgr, row["sentence"])
             writer.write(bgr)
