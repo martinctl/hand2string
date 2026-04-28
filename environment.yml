@@ -10,8 +10,13 @@ dependencies:
   - scikit-learn
   - tqdm
   - pyyaml
+  - jupyter
+  - ipykernel
+  - ipywidgets
+  - seaborn
   - pytorch
   - opencv
   - pip:
       - mediapipe
+      - datasets
       - sacrebleu
