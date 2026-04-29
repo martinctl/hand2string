@@ -22,6 +22,7 @@ wandb/
 mlruns/
 checkpoints/
 outputs/
+out/
 
 # LaTeX build
 *.aux
@@ -37,3 +38,5 @@ outputs/
 .DS_Store
 .idea/
 .vscode/
+
+.env

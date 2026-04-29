@@ -16,7 +16,12 @@ dependencies:
   - seaborn
   - pytorch
   - opencv
+  - av
+  - pandas
+  - pyarrow
+  - python-dotenv
   - pip:
-      - mediapipe
+      - mediapipe==0.9.3
       - datasets
       - sacrebleu
+      - huggingface_hub
