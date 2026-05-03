@@ -28,7 +28,7 @@ from mediapipe.tasks.python.components.containers import detections as detection
 
 POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-    "pose_landmarker_lite/float16/latest/pose_landmarker.task"
+    "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
 )
 HAND_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"

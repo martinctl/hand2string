@@ -40,3 +40,5 @@ out/
 .vscode/
 
 .env
+# Kaggle credentials
+.kaggle/

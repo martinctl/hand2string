@@ -71,6 +71,27 @@ python scripts/upload_hf_dataset.py \
     --repo-id martinctl/how2sign-asl-clips
 ```
 
+## ASL Alphabet PoC (Phase 1)
+
+Static-sign baseline: MediaPipe HandLandmarker -> MLP classifier on
+[ASL Alphabet](https://www.kaggle.com/datasets/grassknoted/asl-alphabet) (29 classes).
+
+```bash
+# 1. download (requires Kaggle API token in ~/.kaggle/kaggle.json)
+kaggle datasets download -d grassknoted/asl-alphabet -p data/asl_alphabet --unzip
+
+# 2. extract hand landmarks (-> data/asl_alphabet_landmarks.npz)
+python scripts/extract_alphabet_landmarks.py \
+    --root data/asl_alphabet/asl_alphabet_train/asl_alphabet_train \
+    --out data/asl_alphabet_landmarks.npz
+
+# 3. train MLP baseline (~2 min on CPU, ~98% val acc)
+python scripts/train_mlp.py --data data/asl_alphabet_landmarks.npz --epochs 30
+
+# 4. live webcam demo
+python scripts/live_alphabet.py --ckpt runs/mlp_alphabet/best.pt
+```
+
 ## Setup
 
 ```bash
