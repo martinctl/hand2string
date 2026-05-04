@@ -12,6 +12,11 @@ dependencies:
   - pyyaml
   - pytorch
   - opencv
+  - av
+  - pandas
+  - pyarrow
+  - python-dotenv
   - pip:
       - mediapipe
       - sacrebleu
+      - huggingface_hub
