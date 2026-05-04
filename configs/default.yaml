@@ -1,30 +1,48 @@
 # Default training / experiment config.
 
 dataset:
-  name: wlasl              # asl_alphabet | wlasl | how2sign
-  root: data/wlasl
-  num_classes: 2000
+  name: how2sign           # asl_alphabet | wlasl | how2sign
+  root: data/how2sign_landmarks
+  split: train
+  val_split: val
+  val_frac: 0.2
 
 preprocessing:
+  landmark_layout: full    # full: 75 pts | upper: pose 0-16 + both hands
   mediapipe:
     hands: true
     pose: true
     face: false
-  fps: 30
+  fps: 25
 
 model:
-  type: lstm               # mlp | lstm | cnn1d
+  type: retrieval_bigru    # retrieval_bigru
   hidden_dim: 256
   num_layers: 2
-  dropout: 0.3
+  embedding_dim: 256
+  dropout: 0.2
+  temperature: 0.07
+
+text:
+  encoder: sentence_transformer  # sentence_transformer | tfidf
+  sentence_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_batch_size: 64
+  embedding_device: auto
+  local_files_only: false
+  tfidf_max_features: 20000
+  tfidf_max_ngram: 2
+  tfidf_min_df: 1
 
 training:
-  window_size: 32          # swept over {8, 16, 32, 64, 96, 128}
-  batch_size: 64
-  epochs: 50
+  window_size: 128
+  batch_size: 32
+  epochs: 20
   lr: 1.0e-3
   weight_decay: 1.0e-4
-  device: cuda
+  num_workers: 0
+  seed: 0
+  device: auto             # auto | cuda | mps | cpu
+  out_dir: runs/how2sign_retrieval
 
 llm:
   backend: ollama          # ollama | api

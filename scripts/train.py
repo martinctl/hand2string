@@ -1,5 +1,10 @@
-"""CLI: train a classifier from a config."""
+"""CLI: train a model from a config."""
 import argparse
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from src.training.train import train
 

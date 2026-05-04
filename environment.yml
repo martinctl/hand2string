@@ -20,3 +20,4 @@ dependencies:
       - mediapipe
       - sacrebleu
       - huggingface_hub
+      - "sentence-transformers<5"
