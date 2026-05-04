@@ -10,6 +10,10 @@ dependencies:
   - scikit-learn
   - tqdm
   - pyyaml
+  - jupyter
+  - ipykernel
+  - ipywidgets
+  - seaborn
   - pytorch
   - opencv
   - av
@@ -17,6 +21,7 @@ dependencies:
   - pyarrow
   - python-dotenv
   - pip:
-      - mediapipe
+      - mediapipe==0.9.3
+      - datasets
       - sacrebleu
       - huggingface_hub
