@@ -24,19 +24,62 @@ def _cfg(config: dict, path: str, default=None):
     return cur
 
 
-def _split_rows(meta: pd.DataFrame, split: str, val_split: str, val_frac: float, seed: int):
-    if "split" in meta.columns and val_split in set(meta["split"]):
+def _split_rows(
+    meta: pd.DataFrame,
+    split: str,
+    val_split: str,
+    val_frac: float,
+    seed: int,
+    *,
+    test_split: str = "test",
+    test_frac: float = 0.1,
+    group_by: str | None = "video_id",
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Return train/val/test rows, creating grouped splits when needed."""
+    if "split" in meta.columns and {split, val_split, test_split}.issubset(set(meta["split"])):
         train_rows = meta[meta["split"] == split].reset_index(drop=True)
         val_rows = meta[meta["split"] == val_split].reset_index(drop=True)
-        return train_rows, val_rows
+        test_rows = meta[meta["split"] == test_split].reset_index(drop=True)
+        return train_rows, val_rows, test_rows
 
     rows = meta[meta["split"] == split].copy() if "split" in meta.columns else meta.copy()
-    rows = rows.sample(frac=1.0, random_state=seed).reset_index(drop=True)
-    if len(rows) < 2:
-        raise ValueError("need at least two cached clips to create a validation split")
-    n_val = max(1, int(round(len(rows) * val_frac)))
-    n_val = min(n_val, len(rows) - 1)
-    return rows.iloc[n_val:].reset_index(drop=True), rows.iloc[:n_val].reset_index(drop=True)
+    if len(rows) < 3:
+        raise ValueError("need at least three cached clips to create train/val/test splits")
+
+    val_frac = float(val_frac)
+    test_frac = float(test_frac)
+    if val_frac <= 0 or test_frac <= 0 or val_frac + test_frac >= 1:
+        raise ValueError("val_frac and test_frac must be positive and sum to less than 1")
+
+    if group_by and group_by in rows.columns and rows[group_by].notna().any():
+        groups = rows[[group_by]].drop_duplicates().sample(frac=1.0, random_state=seed)
+        n_groups = len(groups)
+        n_val = max(1, int(round(n_groups * val_frac)))
+        n_test = max(1, int(round(n_groups * test_frac)))
+        if n_val + n_test >= n_groups:
+            n_val = max(1, min(n_val, n_groups - 2))
+            n_test = max(1, min(n_test, n_groups - n_val - 1))
+        val_groups = set(groups.iloc[:n_val][group_by])
+        test_groups = set(groups.iloc[n_val:n_val + n_test][group_by])
+        val_rows = rows[rows[group_by].isin(val_groups)]
+        test_rows = rows[rows[group_by].isin(test_groups)]
+        train_rows = rows[~rows[group_by].isin(val_groups | test_groups)]
+    else:
+        rows = rows.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+        n_val = max(1, int(round(len(rows) * val_frac)))
+        n_test = max(1, int(round(len(rows) * test_frac)))
+        if n_val + n_test >= len(rows):
+            n_val = max(1, min(n_val, len(rows) - 2))
+            n_test = max(1, min(n_test, len(rows) - n_val - 1))
+        val_rows = rows.iloc[:n_val]
+        test_rows = rows.iloc[n_val:n_val + n_test]
+        train_rows = rows.iloc[n_val + n_test:]
+
+    return (
+        train_rows.reset_index(drop=True),
+        val_rows.reset_index(drop=True),
+        test_rows.reset_index(drop=True),
+    )
 
 
 def _collate(batch: list[dict]) -> dict:
@@ -99,12 +142,15 @@ def train(config_path: str) -> None:
             f"{meta_path} does not exist. Run scripts/extract_landmarks.py first."
         )
     meta = pd.read_parquet(meta_path)
-    train_rows, val_rows = _split_rows(
+    train_rows, val_rows, test_rows = _split_rows(
         meta,
         split=str(_cfg(config, "dataset.split", "train")),
         val_split=str(_cfg(config, "dataset.val_split", "val")),
         val_frac=float(_cfg(config, "dataset.val_frac", 0.2)),
         seed=seed,
+        test_split=str(_cfg(config, "dataset.test_split", "test")),
+        test_frac=float(_cfg(config, "dataset.test_frac", 0.1)),
+        group_by=_cfg(config, "dataset.group_split_by", "video_id"),
     )
 
     window_size = int(_cfg(config, "training.window_size", 128))
@@ -155,9 +201,13 @@ def train(config_path: str) -> None:
     out = Path(_cfg(config, "training.out_dir", "runs/how2sign_retrieval"))
     out.mkdir(parents=True, exist_ok=True)
     text_checkpoint = text_encoder.save(out)
+    train_rows.assign(effective_split="train").to_parquet(out / "split_train.parquet", index=False)
+    val_rows.assign(effective_split="val").to_parquet(out / "split_val.parquet", index=False)
+    test_rows.assign(effective_split="test").to_parquet(out / "split_test.parquet", index=False)
 
     print(
-        f"Training retrieval baseline: {len(train_ds)} train / {len(val_ds)} val | "
+        f"Training retrieval baseline: {len(train_ds)} train / {len(val_ds)} val / "
+        f"{len(test_rows)} test | "
         f"video_dim={sample.shape[-1]} text_dim={text_dim} "
         f"text_encoder={text_encoder.kind} device={device}"
     )
@@ -190,12 +240,12 @@ def train(config_path: str) -> None:
         if metrics["top1"] > best_top1:
             best_top1 = metrics["top1"]
             checkpoint = {
-                    "model_state": model.state_dict(),
-                    "config": config,
-                    "video_input_dim": sample.shape[-1],
-                    "text_input_dim": text_dim,
-                    "layout": layout,
-                    "window_size": window_size,
+                "model_state": model.state_dict(),
+                "config": config,
+                "video_input_dim": sample.shape[-1],
+                "text_input_dim": text_dim,
+                "layout": layout,
+                "window_size": window_size,
             }
             checkpoint.update(text_checkpoint)
             torch.save(checkpoint, out / "best.pt")

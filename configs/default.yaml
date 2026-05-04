@@ -6,6 +6,9 @@ dataset:
   split: train
   val_split: val
   val_frac: 0.2
+  test_split: test
+  test_frac: 0.1
+  group_split_by: video_id
 
 preprocessing:
   landmark_layout: full    # full: 75 pts | upper: pose 0-16 + both hands
@@ -42,7 +45,7 @@ training:
   num_workers: 0
   seed: 0
   device: auto             # auto | cuda | mps | cpu
-  out_dir: runs/how2sign_retrieval
+  out_dir: runs/how2sign_retrieval_5k
 
 llm:
   backend: ollama          # ollama | api

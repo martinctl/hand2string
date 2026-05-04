@@ -56,19 +56,32 @@ def _build_model(ckpt: dict) -> LandmarkTextRetrievalModel:
 
 def _rows_for_eval(config: dict, root: Path, split: str | None) -> pd.DataFrame:
     meta = pd.read_parquet(root / "metadata.parquet")
-    if split is not None:
+    if split is not None and "split" in meta and split in set(meta["split"]):
         rows = meta[meta["split"] == split].reset_index(drop=True) if "split" in meta else meta
         if len(rows) == 0:
             raise ValueError(f"no rows found for split={split!r}")
         return rows
 
-    _, val_rows = _split_rows(
+    run_dir = Path(config.get("training", {}).get("out_dir", "runs/how2sign_retrieval"))
+    split_name = "val" if split in {None, "val", "validation"} else split
+    split_file = run_dir / f"split_{split_name}.parquet"
+    if split_name in {"val", "test"} and split_file.exists():
+        return pd.read_parquet(split_file).reset_index(drop=True)
+
+    _, val_rows, test_rows = _split_rows(
         meta,
         split=str(_cfg(config, "dataset.split", "train")),
         val_split=str(_cfg(config, "dataset.val_split", "val")),
         val_frac=float(_cfg(config, "dataset.val_frac", 0.2)),
         seed=int(_cfg(config, "training.seed", 0)),
+        test_split=str(_cfg(config, "dataset.test_split", "test")),
+        test_frac=float(_cfg(config, "dataset.test_frac", 0.1)),
+        group_by=_cfg(config, "dataset.group_split_by", "video_id"),
     )
+    if split == "test":
+        return test_rows
+    if split not in {None, "val", "validation"}:
+        raise ValueError(f"no rows found for split={split!r}")
     return val_rows
 
 
@@ -152,6 +165,7 @@ def main() -> None:
         for i in range(scores.shape[0]):
             for rank, (j, score) in enumerate(zip(ranked.indices[i].tolist(), ranked.values[i].tolist()), start=1):
                 csv_rows.append({
+                    "split": args.split or "val",
                     "query_index": i,
                     "query_id": ids[i],
                     "ground_truth": sentences[i],

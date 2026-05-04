@@ -159,6 +159,11 @@ python scripts/evaluate_retrieval.py \
 python scripts/evaluate_retrieval.py \
     --ckpt runs/how2sign_retrieval/best.pt \
     --out-csv runs/how2sign_retrieval/retrieval_val.csv
+
+# Generate metrics, rank CSVs, and plots for val/test.
+python scripts/analyze_retrieval.py \
+    --ckpt runs/how2sign_retrieval_5k/best.pt \
+    --top-k 10
 ```
 
 Useful config switches:
@@ -170,10 +175,22 @@ Useful config switches:
 - `text.encoder: sentence_transformer`: default MiniLM text tower.
 - `text.encoder: tfidf`: dependency-light control baseline.
 
-The first small run on 347 cached clips produced a non-random retrieval signal:
-random top-1 over 69 validation clips is about `0.0145`, while the TF-IDF
-baseline reached about `0.1449` top-1. MiniLM is now the default next baseline
-to compare on the same split and on larger caches.
+The first small run on 347 cached clips produced a non-random retrieval signal.
+On the 4,991-clip cache, the current MiniLM/BiGRU baseline uses a grouped split
+by `video_id`: 3,495 train clips, 1,008 validation clips, and 488 test clips.
+
+Latest 4,991-clip run:
+
+| split | candidates | random top-1 | model top-1 | random top-5 | model top-5 | model top-10 | median rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| validation | 1,008 | 0.0010 | 0.0139 | 0.0050 | 0.0377 | 0.0615 | 160 |
+| test | 488 | 0.0020 | 0.0164 | 0.0102 | 0.0594 | 0.1086 | 91 |
+
+The absolute accuracies are still low because retrieval is over hundreds to
+thousands of candidate subtitles, but the model is consistently above random:
+about 14x random top-1 on validation and 8x random top-1 on test. This suggests
+the landmark sequence contains useful alignment signal, while also showing that
+the current baseline is far from translation-ready.
 
 ## Evaluation output
 
@@ -197,19 +214,16 @@ motion/sign content or shortcuts from neighboring clips and repeated topics.
 1. **Qualitative retrieval review**: run `scripts/evaluate_retrieval.py` and
    inspect the top-5 subtitles for good and bad examples. Add `--out-csv
    runs/how2sign_retrieval/retrieval_val.csv` to save all ranks.
-2. **Scale the landmark cache**: extract more clips before heavy tuning. Use
-   `--limit 1000` for a medium smoke run, then remove `--limit` for the full
-   dataset.
-3. **Ablate landmark layouts**: compare `preprocessing.landmark_layout: full`
+2. **Ablate landmark layouts**: compare `preprocessing.landmark_layout: full`
    against `upper` to test whether lower-body pose points add useful signal.
-4. **Use stronger validation splits**: split by `video_id` once more shards are
-   available, so neighboring clips from the same source video do not leak into
-   both train and validation.
-5. **Compare text encoders**: keep MiniLM as the default semantic text tower,
+3. **Use official splits when available**: the temporary split groups by
+   `video_id`; switch to official How2Sign validation/test metadata once the
+   dataset mirror includes those splits.
+4. **Compare text encoders**: keep MiniLM as the default semantic text tower,
    but run `text.encoder: tfidf` as a lightweight control experiment.
-6. **Move to GPU for full runs**: keep local CPU/MPS for smoke tests, then run
+5. **Move to GPU for full runs**: keep local CPU/MPS for smoke tests, then run
    `training.device: cuda` on SLURM or another CUDA machine for the full cache.
-7. **Later translation model**: once retrieval is stable, use the video encoder
+6. **Later translation model**: once retrieval is stable, use the video encoder
    as the visual front-end for sequence generation or for gloss/word-level
    decoding if better annotations become available.
 

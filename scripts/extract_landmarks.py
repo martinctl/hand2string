@@ -12,7 +12,10 @@ Each ``.npz`` contains ``landmarks`` ``(T, 75, 3)``, ``mask`` ``(T, 75)``,
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -23,10 +26,37 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.preprocessing.mediapipe_extractor import extract_landmarks_and_mask
-
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 HF_CACHE_DATASET_DIR = "datasets--martinctl--how2sign-asl-clips"
+
+
+def _quiet_native_logs() -> None:
+    """Reduce MediaPipe/absl/TFLite native logs that otherwise bury tqdm."""
+    os.environ.setdefault("GLOG_minloglevel", "3")
+    os.environ.setdefault("ABSL_LOG_LEVEL", "3")
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    try:
+        import absl.logging
+
+        absl.logging.set_verbosity(absl.logging.ERROR)
+    except Exception:
+        pass
+
+
+@contextmanager
+def _suppress_worker_stderr(enabled: bool):
+    if not enabled:
+        yield
+        return
+    stderr_fd = sys.stderr.fileno()
+    saved_fd = os.dup(stderr_fd)
+    try:
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), stderr_fd)
+            yield
+    finally:
+        os.dup2(saved_fd, stderr_fd)
+        os.close(saved_fd)
 
 
 def _safe_name(value: str) -> str:
@@ -114,7 +144,34 @@ def _load_rows(input_path: Path, split: str | None, limit: int | None) -> pd.Dat
     return rows.head(limit).reset_index(drop=True) if limit else rows
 
 
-def _write_one(row: pd.Series, out_root: Path, target_fps: float | None, overwrite: bool) -> dict:
+def _split_missing_clip_rows(rows: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+    if "clip_path" not in rows.columns:
+        return rows, []
+    exists = rows["clip_path"].apply(lambda p: Path(p).exists())
+    missing_rows = []
+    for row in rows[~exists].to_dict(orient="records"):
+        row["error"] = f"FileNotFoundError: missing clip_path {row.get('clip_path')}"
+        missing_rows.append(row)
+    return rows[exists].reset_index(drop=True), missing_rows
+
+
+def _row_to_dict(row) -> dict:
+    if hasattr(row, "to_dict"):
+        return row.to_dict()
+    return dict(row)
+
+
+def _write_one(
+    row,
+    out_root: Path,
+    target_fps: float | None,
+    overwrite: bool,
+    quiet: bool = True,
+) -> dict:
+    _quiet_native_logs()
+    from src.preprocessing.mediapipe_extractor import extract_landmarks_and_mask
+
+    row = _row_to_dict(row)
     split = str(row.get("split", "train"))
     sample_id = str(row.get("sentence_id", row.get("sentence_name", Path(row["clip_path"]).stem)))
     rel = Path("landmarks") / split / f"{_safe_name(sample_id)}.npz"
@@ -122,7 +179,8 @@ def _write_one(row: pd.Series, out_root: Path, target_fps: float | None, overwri
     dst.parent.mkdir(parents=True, exist_ok=True)
 
     if not dst.exists() or overwrite:
-        landmarks, mask, fps = extract_landmarks_and_mask(row["clip_path"], target_fps=target_fps)
+        with _suppress_worker_stderr(quiet):
+            landmarks, mask, fps = extract_landmarks_and_mask(row["clip_path"], target_fps=target_fps)
         np.savez_compressed(
             dst,
             landmarks=landmarks.astype(np.float32),
@@ -139,7 +197,7 @@ def _write_one(row: pd.Series, out_root: Path, target_fps: float | None, overwri
             mask = blob["mask"] if "mask" in blob else np.isfinite(landmarks).all(axis=-1)
             fps = float(blob["fps"]) if "fps" in blob else float(target_fps or 0.0)
 
-    out_row = row.to_dict()
+    out_row = dict(row)
     out_row["landmark_path"] = rel.as_posix()
     out_row["num_frames"] = int(landmarks.shape[0])
     out_row["num_landmarks"] = int(landmarks.shape[1]) if landmarks.ndim >= 2 else 0
@@ -148,7 +206,25 @@ def _write_one(row: pd.Series, out_root: Path, target_fps: float | None, overwri
     return out_row
 
 
+def _write_one_from_args(args: tuple[dict, str, float | None, bool, bool]) -> dict:
+    _quiet_native_logs()
+    row, out_root, target_fps, overwrite, quiet = args
+    row = _row_to_dict(row)
+    try:
+        return {
+            "ok": True,
+            "row": _write_one(row, Path(out_root), target_fps, overwrite, quiet),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "row": row,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def main() -> None:
+    _quiet_native_logs()
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True, help="dataset root or video path")
     parser.add_argument("--output", type=Path, required=True, help="cache root to write")
@@ -156,6 +232,12 @@ def main() -> None:
     parser.add_argument("--target-fps", type=float, default=25.0)
     parser.add_argument("--limit", type=int, default=None, help="extract only N clips")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--workers", type=int, default=1, help="parallel video workers")
+    parser.add_argument(
+        "--verbose-mediapipe",
+        action="store_true",
+        help="show MediaPipe/TFLite native logs instead of keeping tqdm clean",
+    )
     args = parser.parse_args()
 
     split = None if args.split == "all" else args.split
@@ -164,9 +246,57 @@ def main() -> None:
     if len(rows) == 0:
         raise SystemExit(f"no videos found in {args.input}")
 
+    rows, failed_rows = _split_missing_clip_rows(rows)
+    if len(rows) == 0:
+        failures = pd.DataFrame(failed_rows)
+        failures_path = args.output / "failures.csv"
+        failures.to_csv(failures_path, index=False)
+        raise SystemExit(f"all input rows are missing clips; wrote {failures_path}")
+    if failed_rows:
+        print(f"Skipping {len(failed_rows)} metadata rows with missing clip files.")
+
     cached_rows = []
-    for _, row in tqdm(rows.iterrows(), total=len(rows), desc="extract landmarks"):
-        cached_rows.append(_write_one(row, args.output, args.target_fps, args.overwrite))
+    if args.workers <= 1:
+        for _, row in tqdm(rows.iterrows(), total=len(rows), desc="extract landmarks"):
+            row_dict = _row_to_dict(row)
+            try:
+                cached_rows.append(
+                    _write_one(
+                        row_dict,
+                        args.output,
+                        args.target_fps,
+                        args.overwrite,
+                        quiet=not args.verbose_mediapipe,
+                    )
+                )
+            except Exception as exc:
+                failed = dict(row_dict)
+                failed["error"] = f"{type(exc).__name__}: {exc}"
+                failed_rows.append(failed)
+    else:
+        jobs = [
+            (row, str(args.output), args.target_fps, args.overwrite, not args.verbose_mediapipe)
+            for row in rows.to_dict(orient="records")
+        ]
+        pool = ProcessPoolExecutor(max_workers=args.workers)
+        futures = [pool.submit(_write_one_from_args, job) for job in jobs]
+        try:
+            for future in tqdm(as_completed(futures), total=len(futures), desc="extract landmarks"):
+                result = future.result()
+                if result["ok"]:
+                    cached_rows.append(result["row"])
+                else:
+                    failed = dict(result["row"])
+                    failed["error"] = result["error"]
+                    failed_rows.append(failed)
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
+            print("\nInterrupted. Completed clips remain cached; rerun to resume.")
+            raise SystemExit(130)
+        else:
+            pool.shutdown()
 
     meta = pd.DataFrame(cached_rows)
     meta_path = args.output / "metadata.parquet"
@@ -177,7 +307,22 @@ def main() -> None:
             .drop_duplicates(subset=["sentence_id", "split"], keep="last")
             .reset_index(drop=True)
         )
-    meta.to_parquet(meta_path, index=False)
+    if len(meta) > 0:
+        meta.to_parquet(meta_path, index=False)
+
+    if failed_rows:
+        failures = pd.DataFrame(failed_rows)
+        failures_path = args.output / "failures.csv"
+        if failures_path.exists() and not args.overwrite:
+            existing_failures = pd.read_csv(failures_path)
+            failures = (
+                pd.concat([existing_failures, failures], ignore_index=True)
+                .drop_duplicates(subset=["sentence_id", "split"], keep="last")
+                .reset_index(drop=True)
+            )
+        failures.to_csv(failures_path, index=False)
+        print(f"Skipped {len(failed_rows)} failed clips -> {failures_path}")
+
     print(f"Done. cached {len(cached_rows)} clips -> {meta_path}")
 
 
