@@ -88,7 +88,10 @@ python scripts/extract_alphabet_landmarks.py \
 # 3. train MLP baseline (~2 min on CPU, ~98% val acc)
 python scripts/train_mlp.py --data data/asl_alphabet_landmarks.npz --epochs 30
 
-# 4. live webcam demo
+# 4. evaluate (per-class precision/recall/F1 + top confused pairs)
+python scripts/eval_mlp.py --ckpt runs/mlp_alphabet/best.pt --data data/asl_alphabet_landmarks.npz
+
+# 5. live webcam demo
 python scripts/live_alphabet.py --ckpt runs/mlp_alphabet/best.pt
 ```
 
