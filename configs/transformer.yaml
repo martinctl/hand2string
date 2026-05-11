@@ -1,0 +1,79 @@
+# Improved retrieval model: Transformer encoder + hard negatives + text fine-tuning.
+# Designed for 2x V100-32GB GPUs on the IZAR cluster (izar.epfl.ch).
+# Launch: sbatch submit_job.sh configs/transformer.yaml <WANDB_KEY> 2
+
+dataset:
+  name: how2sign
+  root: data/how2sign_landmarks
+  split: train
+  val_split: val
+  val_frac: 0.2
+  test_split: test
+  test_frac: 0.1
+  group_split_by: video_id
+
+preprocessing:
+  landmark_layout: full      # 75 landmarks (33 pose + 21 + 21 hand)
+  mediapipe:
+    hands: true
+    pose: true
+    face: false
+  fps: 25
+
+model:
+  type: retrieval_transformer  # retrieval_transformer | retrieval_bigru
+  hidden_dim: 256              # d_model for transformer, hidden for GRU
+  num_layers: 4                # transformer depth
+  nhead: 4                     # attention heads (hidden_dim must be divisible)
+  dim_feedforward: 1024        # FFN inner dim (4 × hidden_dim)
+  embedding_dim: 256           # shared embedding space dimension
+  dropout: 0.1
+  temperature: 0.07
+
+text:
+  encoder: sentence_transformer
+  sentence_model: sentence-transformers/all-MiniLM-L6-v2
+  embedding_batch_size: 64
+  embedding_device: auto
+  local_files_only: false
+  # Fine-tune the text backbone after warm-up
+  finetune: true
+  warmup_epochs: 5             # keep frozen for this many epochs first
+  lr_scale: 0.05               # text backbone LR = base_lr * lr_scale
+  # TF-IDF fallback (not used when encoder: sentence_transformer)
+  tfidf_max_features: 20000
+  tfidf_max_ngram: 2
+  tfidf_min_df: 1
+
+training:
+  window_size: 128
+  batch_size: 64               # per GPU; effective = batch_size * num_gpus
+  epochs: 50
+  lr: 3.0e-4
+  min_lr: 1.0e-5
+  weight_decay: 1.0e-4
+  lr_warmup_epochs: 3          # linear warm-up epochs for LR schedule
+  scheduler: cosine            # cosine | none
+  num_workers: 4
+  seed: 42
+  device: auto
+  out_dir: runs/how2sign_transformer
+
+  hard_negatives:
+    enabled: true
+    k_hard: 4                  # top-k hard negatives to precompute per sample
+    warmup_epochs: 3           # start mining after this many epochs
+    refresh_every: 1           # re-mine every N epochs after warm-up
+
+logging:
+  wandb: true
+  wandb_project: hand2string
+  wandb_run_name: transformer_hn_finetune
+
+llm:
+  backend: ollama
+  model: llama3:8b
+
+inference:
+  foveated: false
+  webcam_index: 0
