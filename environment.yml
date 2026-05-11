@@ -21,3 +21,4 @@ dependencies:
       - sacrebleu
       - huggingface_hub
       - "sentence-transformers<5"
+      - wandb
