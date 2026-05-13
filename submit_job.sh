@@ -30,21 +30,19 @@ echo "Start        : $(date)"
 echo "=========================================="
 
 # ── Environment ───────────────────────────────────────────────────────────────
+# conda activate works directly here because the job inherits the submission
+# shell's environment (same pattern as the course's nanofm submit script).
 conda activate hand2string
-
-# Install wandb if not already present (non-interactive)
-pip install -q wandb 2>/dev/null || true
 
 if [ -n "$WANDB_KEY" ]; then
     export WANDB_API_KEY=$WANDB_KEY
 fi
 
 # ── Training ──────────────────────────────────────────────────────────────────
-export OMP_NUM_THREADS=4
+export OMP_NUM_THREADS=1
 
 torchrun \
     --nproc_per_node=$NUM_GPUS \
-    --master_port=$(( RANDOM % 10000 + 20000 )) \
     scripts/train_improved.py \
     --config $CONFIG_FILE
 

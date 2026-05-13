@@ -68,6 +68,7 @@ training:
 logging:
   wandb: true
   wandb_project: hand2string
+  wandb_entity: coralieb7-epfl
   wandb_run_name: transformer_hn_finetune
 
 llm:

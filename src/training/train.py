@@ -116,8 +116,13 @@ def _is_ddp() -> bool:
 
 
 def _ddp_setup() -> tuple[int, int, int]:
-    """Initialise process group; return (rank, local_rank, world_size)."""
-    dist.init_process_group(backend="nccl")
+    """Initialise process group; return (rank, local_rank, world_size).
+
+    Uses the env:// init method that torchrun populates (RANK, LOCAL_RANK,
+    WORLD_SIZE, MASTER_ADDR, MASTER_PORT).  NCCL is the backend for
+    GPU-to-GPU collectives — requires a CUDA-enabled PyTorch build.
+    """
+    dist.init_process_group(backend="nccl", init_method="env://")
     rank = dist.get_rank()
     local_rank = int(os.environ["LOCAL_RANK"])
     world_size = dist.get_world_size()
@@ -164,7 +169,6 @@ def _evaluate(
     top1 = (scores.argmax(dim=1) == labels).float().mean().item()
     k = min(5, scores.shape[1])
     topk = (scores.topk(k, dim=1).indices == labels[:, None]).any(dim=1).float().mean().item()
->>>>>>> 8e902fb (feat: Added LandmarkTransformerEncoder, TrainableTextEncoder and HardNegativeMiner, updated the existing files so it is compatible)
 
     # MRR
     order = scores.argsort(dim=1, descending=True)
@@ -202,8 +206,10 @@ def _maybe_init_wandb(config: dict, rank: int) -> object | None:
         return None
     try:
         import wandb
+        entity = _cfg(config, "logging.wandb_entity", None)
         wandb.init(
             project=str(_cfg(config, "logging.wandb_project", "hand2string")),
+            entity=entity or None,
             name=str(_cfg(config, "logging.wandb_run_name", "auto")) or None,
             config=config,
         )
@@ -221,9 +227,6 @@ def _wandb_log(wb, metrics: dict, step: int) -> None:
 # ──────────────────────── Main train function ─────────────────────────────────
 
 def train(config_path: str) -> None:
-<<<<<<< HEAD
-    raise NotImplementedError
-=======
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 

@@ -23,6 +23,7 @@ mlruns/
 checkpoints/
 outputs/
 out/
+logs/
 
 # LaTeX build
 *.aux
@@ -42,3 +43,4 @@ out/
 .env
 # Kaggle credentials
 .kaggle/
+
