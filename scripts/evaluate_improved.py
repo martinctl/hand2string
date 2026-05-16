@@ -265,7 +265,7 @@ def evaluate_split(
         target_csv = out_csv or (out_dir / f"{split_name}_retrieval_top{k}.csv")
         target_csv.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(target_csv, index=False)
-        print(f"\nCSV  →  {target_csv}")
+        print(f"\nCSV -> {target_csv}")
 
         ranks_df = pd.DataFrame({"split": split_name, "query_id": ids, "sentence": sentences, "true_rank": ranks})
         ranks_csv = out_dir / f"{split_name}_ranks.csv" if out_dir else target_csv.parent / f"{split_name}_ranks.csv"
@@ -317,7 +317,7 @@ def main() -> None:
     metrics_path = out_dir / "metrics.json"
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(all_metrics, f, indent=2)
-    print(f"\nMetrics JSON  →  {metrics_path}")
+    print(f"\nMetrics JSON -> {metrics_path}")
     print(json.dumps(all_metrics, indent=2))
 
 

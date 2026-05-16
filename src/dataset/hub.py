@@ -1,4 +1,4 @@
-"""Pull the How2Sign clips dataset from the Hugging Face Hub."""
+"""Pull How2Sign datasets from the Hugging Face Hub."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +7,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 
 DEFAULT_REPO_ID = "martinctl/how2sign-asl-clips"
+DEFAULT_LANDMARK_REPO_ID = "martinctl/how2sign-asl-landmarks"
 
 
 def load_clips(
@@ -14,6 +15,7 @@ def load_clips(
     split: str | None = "train",
     token: str | None = None,
     cache_dir: str | None = None,
+    local_dir: str | Path | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """Download (or fetch from cache) the dataset and return (root, metadata).
 
@@ -26,6 +28,7 @@ def load_clips(
             repo_type="dataset",
             token=token,
             cache_dir=cache_dir,
+            local_dir=local_dir,
         )
     )
 
@@ -34,4 +37,29 @@ def load_clips(
         df = df[df["split"] == split].reset_index(drop=True)
 
     df["clip_path"] = df["file_name"].apply(lambda p: str(local / p))
+    return local, df
+
+
+def load_landmarks(
+    repo_id: str = DEFAULT_LANDMARK_REPO_ID,
+    split: str | None = None,
+    token: str | None = None,
+    cache_dir: str | None = None,
+    local_dir: str | Path | None = None,
+) -> tuple[Path, pd.DataFrame]:
+    """Download the landmarks-only dataset and return (root, metadata)."""
+    local = Path(
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            token=token,
+            cache_dir=cache_dir,
+            local_dir=local_dir,
+        )
+    )
+
+    df = pd.read_parquet(local / "metadata.parquet")
+    if split is not None:
+        df = df[df["split"] == split].reset_index(drop=True)
+    df["shard_path"] = df["shard_file"].apply(lambda p: str(local / p))
     return local, df

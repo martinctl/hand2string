@@ -21,9 +21,10 @@ dependencies:
   - pyarrow
   - python-dotenv
   - pip:
-      - mediapipe==0.9.3
+      - "mediapipe>=0.10.14"
       - datasets
       - sacrebleu
       - huggingface_hub
       - "sentence-transformers<5"
+      - transformers
       - wandb

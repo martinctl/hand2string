@@ -1,111 +1,130 @@
 # hand2string
 
-Real-Time Sign Language Translation: A Landmark-Based Approach for ASL Recognition.
+Real-time sign language translation experiments for EPFL CS-503 Visual Intelligence.
 
-CS-503 Visual Intelligence project (EPFL, MA4).
+The current shared training artifact is a preprocessed How2Sign landmark dataset on Hugging Face:
 
-## Pipeline
+https://huggingface.co/datasets/martinctl/how2sign-asl-landmarks
 
-1. **MediaPipe landmark extraction** — 3D hand/body coordinates per frame.
-2. **Lightweight classifier** — MLP (static signs) or LSTM/1D-CNN (dynamic gestures) over landmark sequences.
-3. **LLM post-processing** — maps raw ASL word sequences to fluent English.
+It contains sentence-level MediaPipe landmarks, compact geometric features, validity masks, timestamps, source metadata, and documented failure accounting. It does not contain MP4 clips, so teammates do not need to download or preprocess the original How2Sign videos before training.
 
-## Repository layout
+## Quick Start
 
-```
-hand2string/
-├── data/                   # datasets (gitignored)
-├── configs/                # training / experiment configs
-├── notebooks/              # exploration
-├── scripts/                # CLI entry points (download, preprocess, train, run)
-└── src/
-    ├── dataset/            # dataset download & loaders (ASL Alphabet, WLASL, How2Sign)
-    ├── preprocessing/      # MediaPipe landmark extraction
-    ├── models/             # MLP, LSTM, 1D-CNN
-    ├── training/           # training loop, window-size sweep
-    ├── evaluation/         # Precision/Recall/F1, latency (FPS), BLEU
-    ├── llm/                # ASL → English translator (local Llama / API)
-    └── inference/          # live webcam + foveated cropping
-```
-
-## Datasets
-
-- [ASL Alphabet](https://www.kaggle.com/datasets/dorukdemirci/asl-alphabet-dataset) — PoC (static).
-- [WLASL](https://github.com/dxli94/WLASL) — 2,000 signs, 100+ signers.
-- [How2Sign](https://how2sign.github.io/) — 80h continuous ASL with English transcripts.
-
-## Get the dataset
-
-Sentence-level How2Sign clips are mirrored on the Hub at
-[`martinctl/how2sign-asl-clips`](https://huggingface.co/datasets/martinctl/how2sign-asl-clips):
-
-```python
-from huggingface_hub import snapshot_download
-import pandas as pd
-from pathlib import Path
-
-local = Path(snapshot_download("martinctl/how2sign-asl-clips", repo_type="dataset"))
-df    = pd.read_parquet(local / "metadata.parquet")
-clip  = local / df.iloc[0].file_name      # playable mp4
-print(df.iloc[0].sentence)
-```
-
-On slurm, set `HF_HOME=/scratch/$USER/hf_cache` once and the call hits a
-shared cache.
-
-For an end-to-end demo (download → MediaPipe Holistic → skeleton overlay +
-subtitle), see `examples/visualize_one_sentence.py`.
-
-### Rebuilding / extending the dataset
-
-```bash
-# 1. cut clips locally from a downloaded shard
-python scripts/build_hf_dataset.py \
-    --csv ../how2sign_realigned_train.csv \
-    --videos-dir ../shard_001_083 \
-    --out data/how2sign_hf
-
-# 2. push to the Hub (HF_TOKEN must be in hand2string/.env)
-python scripts/upload_hf_dataset.py \
-    --local data/how2sign_hf \
-    --repo-id martinctl/how2sign-asl-clips
-```
-
-## ASL Alphabet PoC (Phase 1)
-
-Static-sign baseline: MediaPipe HandLandmarker -> MLP classifier on
-[ASL Alphabet](https://www.kaggle.com/datasets/grassknoted/asl-alphabet) (29 classes).
-
-```bash
-# 1. download (requires Kaggle API token in ~/.kaggle/kaggle.json)
-kaggle datasets download -d grassknoted/asl-alphabet -p data/asl_alphabet --unzip
-
-# 2. extract hand landmarks (-> data/asl_alphabet_landmarks.npz)
-python scripts/extract_alphabet_landmarks.py \
-    --root data/asl_alphabet/asl_alphabet_train/asl_alphabet_train \
-    --out data/asl_alphabet_landmarks.npz
-
-# 3. train MLP baseline (~2 min on CPU, ~98% val acc)
-python scripts/train_mlp.py --data data/asl_alphabet_landmarks.npz --epochs 30
-
-# 4. evaluate (per-class precision/recall/F1 + top confused pairs)
-python scripts/eval_mlp.py --ckpt runs/mlp_alphabet/best.pt --data data/asl_alphabet_landmarks.npz
-
-# 5. live webcam demo
-python scripts/live_alphabet.py --ckpt runs/mlp_alphabet/best.pt
-```
-
-## Setup
+Create the environment:
 
 ```bash
 conda env create -f environment.yml
 conda activate hand2string
 ```
 
-Or, if updating an existing env:
+Or update an existing environment:
 
 ```bash
 conda env update -f environment.yml --prune
+conda activate hand2string
+```
+
+Download the preprocessed landmark dataset:
+
+```bash
+python scripts/download_data.py --name how2sign_landmarks --root data
+```
+
+This creates:
+
+```text
+data/how2sign_landmarks/
+  metadata.parquet
+  failures.parquet
+  feature_names.json
+  preprocessing_config.json
+  shards/*.npz
+```
+
+Run a loader smoke check:
+
+```bash
+python scripts/check_how2sign_landmark_dataset.py --root data/how2sign_landmarks --max-rows 1000
+```
+
+Run a tiny training smoke test:
+
+```bash
+python scripts/train_improved.py --config configs/how2sign_quickstart.yaml
+```
+
+For a real experiment, start from:
+
+```bash
+python scripts/train_improved.py --config configs/transformer.yaml
+```
+
+## Dataset Notes
+
+The How2Sign source data has known text/video mismatch issues. We keep this explicit:
+
+- `metadata.parquet` contains 35,176 successful landmark clips.
+- `failures.parquet` contains 87 expected CSV rows that could not be generated from the local videos.
+- `audit_report.json` summarizes the final dataset integrity check.
+
+For training, use `metadata.parquet` only and keep the default `min_frames: 10` filter unless you specifically want to study very short segments.
+
+The built-in loader supports three feature inputs:
+
+- `landmarks`: flattened `(128 landmarks x 3)` image coordinates per frame
+- `geometric`: 36 compact hand/body/face relation features per frame
+- `landmarks+geometric`: concatenation of both
+
+The current configs use `geometric` first because it is much lighter and easier to train/debug.
+
+## Repository Layout
+
+```text
+configs/                    training configs
+examples/                   visual inspection demos
+scripts/                    download, dataset build, upload, train entry points
+src/dataset/                dataset download and PyTorch loaders
+src/models/                 retrieval/video/text model modules
+src/preprocessing/          MediaPipe schema, feature recipes, dataset builder
+src/training/               training loop, device selection, text encoders
+data/                       local datasets, gitignored
+runs/                       local training outputs, gitignored
+```
+
+## Useful Commands
+
+Download the shared dataset:
+
+```bash
+python scripts/download_data.py --name how2sign_landmarks --root data
+```
+
+Inspect a feature dashboard from locally available raw videos:
+
+```bash
+python examples/how2sign_feature_dashboard.py \
+  --dataset data/how2sign_landmarks \
+  --videos-root .. \
+  --split train \
+  --out outputs/demo/how2sign_feature_dashboard.html
+```
+
+Rebuild the landmark dataset from local raw How2Sign videos:
+
+```bash
+python scripts/build_how2sign_landmark_dataset.py \
+  --root .. \
+  --out data/how2sign_landmarks_hf \
+  --target-fps 25 \
+  --pose-model lite \
+  --workers 4 \
+  --samples-per-shard 128
+```
+
+Push a rebuilt dataset to Hugging Face:
+
+```bash
+hf upload-large-folder martinctl/how2sign-asl-landmarks data/how2sign_landmarks_hf --repo-type dataset
 ```
 
 ## Team

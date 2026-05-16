@@ -175,7 +175,7 @@ def main() -> None:
         if sys.platform == "darwin":
             print("macOS: if the window never appears, run from Terminal.app or grant permissions to that app.")
     else:
-        print(f"Headless: writing to {record_path} — press Ctrl+C to stop.")
+        print(f"Headless: writing to {record_path} - press Ctrl+C to stop.")
 
     try:
         with Holistic(fps=fps, include_face=True) as h:

@@ -1,0 +1,48 @@
+# Minimal CPU-friendly smoke run on the preprocessed How2Sign landmark dataset.
+
+dataset:
+  name: how2sign_landmarks
+  root: data/how2sign_landmarks
+  split: train
+  val_split: val
+  test_split: test
+  min_frames: 10
+  limit_per_split: 128
+  group_split_by: video_id
+
+preprocessing:
+  landmark_layout: geometric
+
+model:
+  type: retrieval_bigru
+  hidden_dim: 64
+  num_layers: 1
+  embedding_dim: 64
+  dropout: 0.1
+  temperature: 0.07
+
+text:
+  encoder: tfidf
+  tfidf_max_features: 4096
+  tfidf_max_ngram: 2
+  tfidf_min_df: 1
+  finetune: false
+
+training:
+  window_size: 128
+  batch_size: 8
+  epochs: 1
+  lr: 1.0e-3
+  min_lr: 1.0e-4
+  weight_decay: 1.0e-4
+  lr_warmup_epochs: 1
+  scheduler: none
+  num_workers: 0
+  seed: 42
+  device: auto
+  out_dir: runs/how2sign_quickstart
+  hard_negatives:
+    enabled: false
+
+logging:
+  wandb: false

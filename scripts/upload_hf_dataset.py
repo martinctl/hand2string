@@ -4,6 +4,11 @@ Usage:
     python scripts/upload_hf_dataset.py \
         --local data/how2sign_hf \
         --repo-id martinctl/how2sign-asl-clips [--private]
+
+    python scripts/upload_hf_dataset.py \
+        --local data/how2sign_landmarks_hf \
+        --repo-id martinctl/how2sign-asl-landmarks \
+        --commit-message "Upload How2Sign landmark shards"
 """
 from __future__ import annotations
 
@@ -21,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local", type=Path, required=True, help="dataset folder to upload")
     parser.add_argument("--repo-id", required=True, help="e.g. martinctl/how2sign-asl-clips")
     parser.add_argument("--private", action="store_true", help="create private (default: public)")
-    parser.add_argument("--commit-message", default="Update how2sign clips dataset")
+    parser.add_argument("--commit-message", default="Update How2Sign dataset")
     return parser.parse_args()
 
 
@@ -35,7 +40,7 @@ def main() -> None:
         raise SystemExit("HF_TOKEN not found in environment or hand2string/.env")
 
     if not (args.local / "metadata.parquet").exists():
-        raise SystemExit(f"{args.local} has no metadata.parquet — run build_hf_dataset.py first")
+        raise SystemExit(f"{args.local} has no metadata.parquet - run build_hf_dataset.py first")
 
     api = HfApi(token=token)
 

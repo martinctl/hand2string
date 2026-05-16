@@ -21,6 +21,22 @@ from pathlib import Path
 import av
 
 
+_ENCODER_CANDIDATES = ("libx264", "libopenh264", "mpeg4")
+
+
+def _pick_encoder() -> str:
+    for name in _ENCODER_CANDIDATES:
+        try:
+            av.Codec(name, "w")
+            return name
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"no usable video encoder found; tried {_ENCODER_CANDIDATES}. "
+        "Install PyAV with libx264 support (e.g. `conda install -c conda-forge av`)."
+    )
+
+
 def cut_clip(
     src: Path,
     start: float,
@@ -37,8 +53,10 @@ def cut_clip(
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst = dst.resolve()
 
+    encoder = _pick_encoder()
+
     try:
-        return _cut_clip_inner(src, start, end, dst, crf, preset)
+        return _cut_clip_inner(src, start, end, dst, crf, preset, encoder)
     except Exception:
         if dst.exists() and dst.stat().st_size == 0:
             try:
@@ -55,6 +73,7 @@ def _cut_clip_inner(
     dst: Path,
     crf: int,
     preset: str,
+    encoder: str,
 ) -> None:
     with av.open(str(src)) as in_container:
         in_stream = in_container.streams.video[0]
@@ -70,15 +89,19 @@ def _cut_clip_inner(
             in_container.seek(0)
 
         with av.open(str(dst), mode="w") as out_container:
-            out_stream = out_container.add_stream("libx264", rate=fps)
+            out_stream = out_container.add_stream(encoder, rate=fps)
             out_stream.width = in_stream.width
             out_stream.height = in_stream.height
             out_stream.pix_fmt = "yuv420p"
-            out_stream.options = {
-                "crf": str(crf),
-                "preset": preset,
-                "movflags": "+faststart",
-            }
+            opts = {"movflags": "+faststart"}
+            if encoder == "libx264":
+                opts["crf"] = str(crf)
+                opts["preset"] = preset
+            elif encoder == "libopenh264":
+                opts["b"] = "2M"
+            elif encoder == "mpeg4":
+                opts["qscale"] = "5"
+            out_stream.options = opts
             out_stream.codec_context.time_base = Fraction(1, int(round(float(fps))))
 
             out_idx = 0

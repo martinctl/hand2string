@@ -7,13 +7,14 @@ dataset:
   root: data/how2sign_landmarks
   split: train
   val_split: val
+  min_frames: 10
   val_frac: 0.2
   test_split: test
   test_frac: 0.1
   group_split_by: video_id
 
 preprocessing:
-  landmark_layout: full      # 75 landmarks (33 pose + 21 + 21 hand)
+  landmark_layout: geometric # 36 compact geometric features from the landmark cache
   mediapipe:
     hands: true
     pose: true

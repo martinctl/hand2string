@@ -164,7 +164,6 @@ def _evaluate(
     top1 = (scores.argmax(dim=1) == labels).float().mean().item()
     k = min(5, scores.shape[1])
     topk = (scores.topk(k, dim=1).indices == labels[:, None]).any(dim=1).float().mean().item()
->>>>>>> 8e902fb (feat: Added LandmarkTransformerEncoder, TrainableTextEncoder and HardNegativeMiner, updated the existing files so it is compatible)
 
     # MRR
     order = scores.argsort(dim=1, descending=True)
@@ -221,9 +220,6 @@ def _wandb_log(wb, metrics: dict, step: int) -> None:
 # ──────────────────────── Main train function ─────────────────────────────────
 
 def train(config_path: str) -> None:
-<<<<<<< HEAD
-    raise NotImplementedError
-=======
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
@@ -250,6 +246,22 @@ def train(config_path: str) -> None:
         raise FileNotFoundError(f"{meta_path} not found. Run scripts/extract_landmarks.py first.")
 
     meta = pd.read_parquet(meta_path)
+    min_frames = int(_cfg(config, "dataset.min_frames", 1))
+    if min_frames > 1 and "n_frames" in meta.columns:
+        before = len(meta)
+        meta = meta[meta["n_frames"] >= min_frames].reset_index(drop=True)
+        if before != len(meta):
+            print(f"Filtered {before - len(meta)} clips with n_frames < {min_frames}.")
+    limit_per_split = _cfg(config, "dataset.limit_per_split", None)
+    if limit_per_split is not None:
+        limit = int(limit_per_split)
+        meta = (
+            meta.sort_values(["split", "sentence_name"], kind="stable")
+            .groupby("split", group_keys=False)
+            .head(limit)
+            .reset_index(drop=True)
+        )
+        print(f"Using at most {limit} clips per split for this run.")
     train_rows, val_rows, test_rows = _split_rows(
         meta,
         split=str(_cfg(config, "dataset.split", "train")),
@@ -422,7 +434,7 @@ def train(config_path: str) -> None:
         # ── Hard-negative refresh ─────────────────────────────────────────────
         if miner is not None and epoch > hn_warmup and (epoch - hn_warmup - 1) % hn_refresh_every == 0:
             if is_main:
-                print(f"[epoch {epoch}] refreshing hard negatives …")
+                print(f"[epoch {epoch}] refreshing hard negatives...")
             encode_fn = _trainable_encode_text_fn if use_trainable_text else _frozen_encode_text_fn
             miner.refresh(model, train_dl_plain, encode_fn, device, all_train_sentences)
 
@@ -509,7 +521,7 @@ def train(config_path: str) -> None:
     # ── Save history & cleanup ─────────────────────────────────────────────────
     if is_main:
         np.savez(out / "history.npz", history=np.asarray(history, dtype=np.float32))
-        print(f"Best val_top1: {best_top1:.4f}  →  {out / 'best.pt'}")
+        print(f"Best val_top1: {best_top1:.4f} -> {out / 'best.pt'}")
         if wb is not None:
             wb.finish()
 

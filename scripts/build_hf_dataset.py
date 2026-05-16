@@ -11,8 +11,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-import traceback
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -98,7 +99,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", default="train")
     parser.add_argument("--limit", type=int, default=None, help="only cut N rows (smoke test)")
     parser.add_argument("--crf", type=int, default=23)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=min(8, os.cpu_count() or 1),
+        help="parallel encode workers (default: min(8, cpu_count))",
+    )
     return parser.parse_args()
+
+
+def _cut_one(job: dict) -> dict:
+    """Worker entry point. Returns a status dict so the parent can aggregate."""
+    src = Path(job["src"])
+    dst = Path(job["dst"])
+    if dst.exists():
+        return {"status": "skipped", "row": job["row"]}
+    try:
+        cut_clip(src=src, start=job["start"], end=job["end"], dst=dst, crf=job["crf"])
+    except Exception as exc:
+        return {"status": "failed", "name": job["row"]["sentence_name"], "error": repr(exc)}
+    return {"status": "ok", "row": job["row"]}
 
 
 def main() -> None:
@@ -126,34 +146,12 @@ def main() -> None:
         df_present = df_present.head(args.limit).copy()
         print(f"--limit {args.limit} -> processing {len(df_present)} rows")
 
-    rows: list[dict] = []
-    n_skipped_existing = 0
-    n_failed = 0
-
-    for r in tqdm(df_present.itertuples(index=False), total=len(df_present)):
+    jobs: list[dict] = []
+    for r in df_present.itertuples(index=False):
         sentence_name = r.SENTENCE_NAME
         clip_rel = Path("clips") / args.split / f"{sentence_name}.mp4"
         clip_abs = out_root / clip_rel
-        src = args.videos_dir / f"{r.VIDEO_NAME}.mp4"
-
-        if not clip_abs.exists():
-            try:
-                cut_clip(
-                    src=src,
-                    start=float(r.START_REALIGNED),
-                    end=float(r.END_REALIGNED),
-                    dst=clip_abs,
-                    crf=args.crf,
-                )
-            except Exception as exc:
-                n_failed += 1
-                tqdm.write(f"FAIL {sentence_name}: {exc}")
-                traceback.print_exc()
-                continue
-        else:
-            n_skipped_existing += 1
-
-        rows.append({
+        row = {
             "sentence_id": r.SENTENCE_ID,
             "sentence_name": sentence_name,
             "video_id": r.VIDEO_ID,
@@ -164,7 +162,35 @@ def main() -> None:
             "sentence": r.SENTENCE,
             "split": args.split,
             "file_name": clip_rel.as_posix(),
+        }
+        jobs.append({
+            "src": str(args.videos_dir / f"{r.VIDEO_NAME}.mp4"),
+            "dst": str(clip_abs),
+            "start": row["start"],
+            "end": row["end"],
+            "crf": args.crf,
+            "row": row,
         })
+
+    rows: list[dict] = []
+    n_skipped_existing = 0
+    n_failed = 0
+
+    workers = max(1, args.workers)
+    print(f"Encoding with {workers} worker process(es)")
+
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_cut_one, j) for j in jobs]
+        for fut in tqdm(as_completed(futures), total=len(futures)):
+            res = fut.result()
+            if res["status"] == "ok":
+                rows.append(res["row"])
+            elif res["status"] == "skipped":
+                rows.append(res["row"])
+                n_skipped_existing += 1
+            else:
+                n_failed += 1
+                tqdm.write(f"FAIL {res['name']}: {res['error']}")
 
     if not rows:
         raise SystemExit("no clips produced; aborting")
