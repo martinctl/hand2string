@@ -4,7 +4,7 @@
 
 dataset:
   name: how2sign
-  root: data/how2sign_landmarks
+  root: /scratch/izar/banuls/how2sign_landmarks   # set by extract_landmarks.py --output
   split: train
   val_split: val
   val_frac: 0.2

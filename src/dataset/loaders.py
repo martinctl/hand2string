@@ -96,21 +96,35 @@ class How2SignLandmarkRetrievalDataset(Dataset):
     # ── Feature extraction ────────────────────────────────────────────────────
 
     def _load_seq(self, path: Path) -> np.ndarray:
-        """Load and return a ``(T, 75, 3)`` float32 array."""
+        """Load the feature sequence from a .npz file.
+
+        Prefers the enriched ``features`` array (T, 410) produced by
+        ``scripts/extract_landmarks.py``.  Falls back to the raw
+        ``landmarks`` array (T, 75, 3) for backward compatibility.
+        """
         if not path.exists():
             raise FileNotFoundError(
                 f"Landmark file not found: {path}\n"
                 "Run scripts/extract_landmarks.py to build the landmark cache."
             )
         with np.load(path, allow_pickle=False) as npz:
+            if "features" in npz:
+                return npz["features"].astype(np.float32)   # (T, 410) — already flat
             key = "landmarks" if "landmarks" in npz else next(iter(npz.keys()))
-            return npz[key].astype(np.float32)
+            return npz[key].astype(np.float32)              # (T, 75, 3) — legacy
 
     def _apply_layout(self, seq: np.ndarray) -> np.ndarray:
-        """Slice landmarks and flatten: ``(T, 75, 3)`` → ``(T, N*3)``."""
-        sl = self._LAYOUT_SLICES[self.layout]
-        T = len(seq)
-        return seq[:, sl, :].reshape(T, -1)
+        """Slice landmarks and flatten to (T, D).
+
+        When ``seq`` is 3-D — i.e. the raw (T, 75, 3) legacy format — apply
+        the layout slice and flatten.  When it is already 2-D (enriched
+        features), return it as-is; the layout parameter is ignored because
+        all feature groups are already baked in.
+        """
+        if seq.ndim == 3:
+            sl = self._LAYOUT_SLICES[self.layout]
+            return seq[:, sl, :].reshape(len(seq), -1)
+        return seq   # (T, F) enriched — no further slicing needed
 
     def _window(self, seq: np.ndarray) -> np.ndarray:
         """Center-crop or zero-pad to exactly ``window_size`` frames."""
